@@ -1,0 +1,5 @@
+python-vlc
+paho-mqtt
+RPi.GPIO
+toml
+pyALSAAUDIO
