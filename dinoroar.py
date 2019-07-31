@@ -1,7 +1,12 @@
-import re
 import os
+from subprocess import Popen, PIPE, run
+
+assets_path = os.path.join(os.path.realpath(os.path.dirname(__file__)), 'assets')
+startup_sub = Popen(['mpg123', os.path.join(assets_path, 'lotus-by-kevin-macleod.mp3')], stdout=PIPE, stderr=PIPE)
+
+import re
 import json
-from subprocess import Popen
+import time
 
 import RPi.GPIO as GPIO
 import toml
@@ -15,9 +20,8 @@ class Dinoroar:
     mqtt_client = None
     
     def __init__(self):
+        run(['/usr/bin/amixer', 'cset', "iface=Mixer,name='Micro'", "0%"])
         story_path = os.path.join(os.path.realpath(os.path.dirname(__file__)), 'stories')
-        assets_path = os.path.join(os.path.realpath(os.path.dirname(__file__)), 'assets')
-        startup_sub = Popen(['mpg123', os.path.join(assets_path, 'lotus-by-kevin-macleod.mp3')])
         self.stories = [os.path.join(story_path, story) for story in os.listdir(story_path)]
         with open('/etc/snips.toml') as f:
             self.snips_config = toml.load(f)
@@ -34,7 +38,16 @@ class Dinoroar:
         self.mqtt_client.username_pw_set(self.snips_config['snips-common']['mqtt_username'], self.snips_config['snips-common']['mqtt_password'])
         self.mqtt_client.on_connect = self.mqtt_on_connect
         self.mqtt_client.on_message = self.mqtt_on_message
-        self.mqtt_client.connect(host)
+        i = 0
+        while True:
+            try:
+                self.mqtt_client.connect(host)
+            except OSError:
+                print("Network not ready. Waiting {} second.".format(2 ** i))
+                time.sleep(2 ** i)
+                i += 1
+            else:
+                break
 
     def _initialize_gpio(self):
         GPIO.setmode(GPIO.BCM)
@@ -52,35 +65,25 @@ class Dinoroar:
             self.listening_started()
         elif topic == "hermes/asr/stopListening":
             self.listening_stopped()
-        elif re.match("hermes/hotword/.+/detected", topic):
-            self.hotword_detected()
         elif re.match("hermes/intent/.+", topic):
-            self.process_intent(json.loads(payload))
-        elif topic.startswith("hermes/asr"):
-            print(topic)
-        else:
-            print(topic)
+            self.process_intent(json.loads(payload.decode()))
 
     def listening_started(self):
-        print("Listening has started")
+        run(['/usr/bin/amixer', 'cset', "iface=Mixer,name='Micro'", "70%"])
 
     def listening_stopped(self):
-        print("Listening has stopped")
+        run(['/usr/bin/amixer', 'cset', "iface=Mixer,name='Micro'", "0%"])
 
-    def hotword_detected(self):
-        print("Hotword detected")
+    def process_intent(self, message):
+        if message['intent']['intentName'] == 'jzylks:ReadStory':
+            story = random.choice(self.stories)
+            self.action_sub = Popen(['mpg123', story], stdout=PIPE, stderr=PIPE)
+
+    def button_pressed(self, event):
         if self.action_sub:
             self.action_sub.terminate()
             self.action_sub = None
-
-    def process_intent(self, message):
-        print(message['intent']['intentName'])
-        if message['intent']['intentName'] == 'jzylks:ReadStory':
-            story = random.choice(self.stories)
-            self.action_sub = Popen(['mpg123', story])
-
-    def button_pressed(self, event):
-        print('Pressed')
+            return
         message = {
             'siteId': self.snips_site, 
             'modelId': self.snips_model['id'],
@@ -88,7 +91,7 @@ class Dinoroar:
             'modelType': 'universal',
             'currentSensitivity': 0.5
         }
-        self.client.publish('hermes/hotword/default/detected', json.dumps(message))
+        self.mqtt_client.publish('hermes/hotword/default/detected', json.dumps(message))
 
     def listen(self):
         self.mqtt_client.loop_forever()

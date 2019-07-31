@@ -1,0 +1,9 @@
+[Unit]
+Description=Dinoroar
+
+[Service]
+Type=simple
+ExecStart=/home/pi/dinoroar/venv/bin/python /home/pi/dinoroar/dinoroar.py
+
+[Install]
+WantedBy=multi-user.target
